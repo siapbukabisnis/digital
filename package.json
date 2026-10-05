@@ -1,0 +1,13 @@
+{
+  "name": "sbb-siap-buka-bisnis",
+  "version": "25.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node dev-server.mjs",
+    "check": "node tests.mjs && node regression-tests.mjs && node verify-static.mjs && node audit.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
