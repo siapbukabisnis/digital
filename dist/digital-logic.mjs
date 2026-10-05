@@ -131,7 +131,8 @@ export function sanitizeDigitalState(value, configValue = DEFAULT_DIGITAL_CONFIG
   const config = sanitizeDigitalConfig(configValue); const source = value && typeof value === "object" ? value : {}; const profile = sanitizeDigitalProfile(source.profile || {}); const allowed = new Set(config.questions.map(item => item.id)); const answers = {};
   for (const [id, answer] of Object.entries(source.answers || {})) if (allowed.has(id) && [0, 1, 2, 3].includes(Number(answer))) answers[id] = Number(answer);
   const active = getDigitalQuestions(config, profile); const complete = profile.completed && active.length > 0 && active.every(item => Object.hasOwn(answers, item.id));
-  return { version: 2, profile, answers, completed: source.completed === true && complete };
+  const completedTasks = [...new Set((Array.isArray(source.completedTasks) ? source.completedTasks : []).filter(id => typeof id === "string" && allowed.has(id)))];
+  return { version: 2, profile, answers, completedTasks, completed: source.completed === true && complete };
 }
 
 const GOAL_MULTIPLIERS = { awareness: { strategy: 1.15, presence: 1.25, brand: 1.3 }, leads: { strategy: 1.15, presence: 1.25, conversion: 1.3, growth: 1.2 }, sales: { strategy: 1.1, presence: 1.15, conversion: 1.35, growth: 1.2 }, repeat: { brand: 1.1, conversion: 1.15, system: 1.4 }, efficiency: { conversion: 1.2, system: 1.45 } };

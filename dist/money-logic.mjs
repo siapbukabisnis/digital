@@ -90,8 +90,17 @@ export function clamp(value, min, max) {
 }
 
 export function numericValue(value) {
-  const digits = String(value ?? "").replace(/[^0-9]/g, "");
-  return digits ? Number(digits) : 0;
+  if (typeof value === "number") return Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+  const text = String(value ?? "").trim();
+  if (/^[\s\p{Sc}A-Za-z]*[-−]/u.test(text)) return 0;
+  let cleaned = text.replace(/[^0-9.,]/g, "");
+  if (!cleaned) return 0;
+  if (cleaned.includes(",")) {
+    if (cleaned.includes(".") && cleaned.lastIndexOf(".") > cleaned.lastIndexOf(",")) cleaned = cleaned.replaceAll(",", "");
+    else cleaned = cleaned.replaceAll(".", "").replace(",", ".");
+  } else cleaned = cleaned.replaceAll(".", "");
+  const amount = Number(cleaned);
+  return Number.isFinite(amount) ? Math.max(0, Math.round(amount)) : 0;
 }
 
 export function isValidISODate(value) {
@@ -271,15 +280,15 @@ export function calculateMonth(transactions, settings, monthKey) {
 
   let status = "Belum ada data";
   let statusTone = "empty";
-  if (totalAllocation > 100) {
+  if (balance < 0) {
+    status = "Uang bulan ini minus";
+    statusTone = "danger";
+  } else if (income > 0 && totalBudget > income) {
     status = "Atur ulang anggaran";
     statusTone = "danger";
   } else if (income <= 0) {
     status = "Masukkan pendapatan";
     statusTone = "empty";
-  } else if (balance < 0) {
-    status = "Uang bulan ini minus";
-    statusTone = "danger";
   } else if (overspentRows.length) {
     status = "Ada batas terlewati";
     statusTone = "warning";
@@ -346,14 +355,14 @@ export function calculateYear(transactions, settings, year = Number(getCurrentMo
 }
 
 export function nextStep(result) {
-  if (result.totalAllocation > 100) {
-    return `Kurangi pembagian anggaran sebesar ${formatPercent(result.totalAllocation - 100)} agar tidak lebih dari 100%.`;
+  if (result.balance < 0) {
+    return `Pengeluaran dan tabungan melebihi pemasukan sebesar ${formatRupiah(Math.abs(result.balance))}. Periksa catatan dan sesuaikan pengeluaran berikutnya.`;
+  }
+  if (result.income > 0 && result.totalBudget > result.income) {
+    return `Kurangi total anggaran sebesar ${formatRupiah(result.totalBudget - result.income)} agar sesuai dengan pendapatan bulan ini.`;
   }
   if (result.income <= 0) {
     return "Catat pendapatan bulan ini terlebih dahulu.";
-  }
-  if (result.balance < 0) {
-    return `Kurangi pengeluaran sedikitnya ${formatRupiah(Math.abs(result.balance))} agar uang tidak minus.`;
   }
   if (result.overspentRows.length) {
     const biggest = result.overspentRows[0];

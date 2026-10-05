@@ -1,8 +1,8 @@
 const BASE_URL = self.registration.scope;
 const CACHE_PREFIX = `sbb-finance-suite:${BASE_URL}:`;
-const CACHE_NAME = `${CACHE_PREFIX}v25`;
+const CACHE_NAME = `${CACHE_PREFIX}v26`;
 const APP_SHELL = [
-  "./", "./index.html", "./styles.css?v=25", "./redesign.css?v=25", "./app.mjs?v=25",
+  "./", "./index.html", "./styles.css?v=26", "./redesign.css?v=26", "./app.mjs?v=26",
   "./logic.mjs", "./money-logic.mjs", "./export-logic.mjs", "./backup-logic.mjs",
   "./health-logic.mjs", "./digital-logic.mjs", "./suite-logic.mjs", "./catalog.mjs",
   "./manifest.webmanifest", "./sbb-logo.png", "./icon-192.png", "./icon-512.png",

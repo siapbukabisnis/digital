@@ -366,13 +366,19 @@ function hasStoredProfile(key) {
 function persistEntries(entries, { notify = true } = {}) {
   const previous = [];
   try {
+    const conflicts = entries.filter(([key]) => committedRaw.has(key) && readRawStorage(key) !== committedRaw.get(key));
+    if (conflicts.length) {
+      refreshStoredKeys(entries.map(([key]) => key));
+      if (notify) showToast("Data baru ditemukan dari tab lain. Periksa hasil terbaru, lalu ulangi perubahanmu agar data tidak tertimpa.");
+      return false;
+    }
     const encoded = entries.map(([key, value]) => [key, value === null ? null : JSON.stringify(value)]);
     for (const [key, value] of encoded) {
       previous.push([key, localStorage.getItem(key)]);
       if (value === null) localStorage.removeItem(key);
       else localStorage.setItem(key, value);
     }
-    for (const [key, value] of encoded) committedState.set(key, value === null ? null : JSON.parse(value));
+    for (const [key, value] of encoded) { committedState.set(key, value === null ? null : JSON.parse(value)); committedRaw.set(key, value); }
     return true;
   } catch {
     for (const [key, value] of previous.reverse()) {
@@ -495,6 +501,40 @@ const committedState = new Map([
   [STORAGE.healthHistory, clone(healthHistory)], [STORAGE.admin, clone(adminState)],
   [STORAGE.digital, clone(digitalState)], [STORAGE.session, clone(session)],
 ]);
+const committedRaw = new Map([...committedState.keys()].map(key => [key, readRawStorage(key)]));
+
+function readRawStorage(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+
+function refreshStoredKeys(keys) {
+  const changed = new Set(keys);
+  if (changed.has(STORAGE.transactions) || changed.has(STORAGE.moneySettings)) { changed.add(STORAGE.transactions); changed.add(STORAGE.moneySettings); }
+  if (changed.has(STORAGE.health) || changed.has(STORAGE.healthHistory)) { changed.add(STORAGE.health); changed.add(STORAGE.healthHistory); }
+  if (changed.has(STORAGE.admin)) { changed.add(STORAGE.digital); changed.add(STORAGE.session); }
+  if (changed.has(STORAGE.admin)) adminState = mergedAdmin(readStorage(STORAGE.admin, null));
+  if (changed.has(STORAGE.transactions)) transactions = sanitizeTransactions(readStorage(STORAGE.transactions, []));
+  if (changed.has(STORAGE.moneySettings)) moneySettings = sanitizeSettings(readStorage(STORAGE.moneySettings, {}));
+  if (changed.has(STORAGE.readiness)) readinessProfile = normalizedProfile(readStorage(STORAGE.readiness, DEFAULT_PROFILE));
+  if (changed.has(STORAGE.health)) healthProfile = sanitizeHealthProfile(readStorage(STORAGE.health, DEFAULT_HEALTH_PROFILE));
+  if (changed.has(STORAGE.healthHistory)) healthHistory = sanitizeHealthHistoryData(readStorage(STORAGE.healthHistory, []));
+  if (changed.has(STORAGE.digital)) { digitalState = sanitizeDigitalState(readStorage(STORAGE.digital, {}), adminState.digitalConfig); digitalQuestionIndex = firstUnansweredDigitalIndex(); digitalProfileEditing = !digitalState.profile.completed; }
+  if (changed.has(STORAGE.session)) session = sanitizeLocalSession(readStorage(STORAGE.session, null), adminState.settings, adminState.codes);
+  const state = new Map([[STORAGE.transactions, transactions], [STORAGE.moneySettings, moneySettings], [STORAGE.readiness, readinessProfile], [STORAGE.health, healthProfile], [STORAGE.healthHistory, healthHistory], [STORAGE.admin, adminState], [STORAGE.digital, digitalState], [STORAGE.session, session]]);
+  for (const key of changed) {
+    committedRaw.set(key, readRawStorage(key));
+    if (state.has(key)) committedState.set(key, clone(state.get(key)));
+  }
+  if (!document.querySelector("#overview-chart")) return;
+  if (changed.has(STORAGE.session) || changed.has(STORAGE.admin)) { if (session) showApplication(); else showGate(); }
+  else renderAll();
+}
+
+function synchronizeStoredData(event) {
+  const keys = event.key === null ? [...committedState.keys()] : [event.key];
+  if (!keys.some(key => committedState.has(key))) return;
+  refreshStoredKeys(keys);
+}
 
 function restoreCommittedState(keys) {
   for (const key of keys) {
@@ -1418,6 +1458,7 @@ function navigate(route) {
   if (route === "readiness") renderReadiness();
   if (route === "health") renderHealth();
   if (route === "digital") renderDigital();
+  if (route === "business") requestAnimationFrame(resizeBusinessFrame);
   if (route === "admin") renderAdmin();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -1539,7 +1580,7 @@ function openRecordForDate(date) {
 
 function renderBudget(result) {
   $("#expense-allocation").textContent = formatRupiah(result.expenseBudget);
-  $("#saving-target").value = formatNumericInput(result.savingTarget);
+  if (document.activeElement !== $("#saving-target")) $("#saving-target").value = formatNumericInput(result.savingTarget);
   $("#unallocated").textContent = formatRupiah(result.unallocatedAmount);
   $("#unallocated").classList.toggle("danger-text", result.unallocatedAmount < 0);
   $("#allocation-bar").style.width = `${Math.min(result.totalAllocation, 100)}%`;
@@ -1547,7 +1588,19 @@ function renderBudget(result) {
   $("#allocation-warning").textContent = result.income <= 0 ? "Catat pendapatan bulan ini untuk membandingkan anggaran." : result.unallocatedAmount < 0 ? `Alokasi melebihi pendapatan sebesar ${formatRupiah(-result.unallocatedAmount)}.` : `Total alokasi ${formatRupiah(result.totalBudget)} dari pendapatan ${formatRupiah(result.income)}.`;
   $("#category-count").textContent = `${result.budgetRows.length}/${MAX_EXPENSE_CATEGORIES} kategori`;
   $("#add-expense-category").disabled = result.budgetRows.length >= MAX_EXPENSE_CATEGORIES;
-  $("#budget-list").innerHTML = result.budgetRows.map((row, index) => `<div class="budget-row"><span class="budget-name-wrap"><input class="budget-name-input" type="text" value="${escapeHTML(row.name)}" maxlength="40" data-category-name="${index}" aria-label="Nama kategori ${index + 1}"><small>${formatRupiah(row.used)} / ${formatRupiah(row.cap)}</small></span><span class="budget-controls"><span class="inline-number nominal-number"><span>Rp</span><input type="text" inputmode="numeric" value="${formatNumericInput(row.cap)}" data-budget="${escapeHTML(row.name)}" aria-label="Batas ${escapeHTML(row.name)} dalam rupiah"></span><button class="delete-category" type="button" data-delete-category="${index}" aria-label="Hapus kategori ${escapeHTML(row.name)}">Hapus</button></span></div>`).join("");
+  const list = $("#budget-list");
+  if (list.children.length !== result.budgetRows.length) list.innerHTML = result.budgetRows.map((row, index) => `<div class="budget-row"><span class="budget-name-wrap"><input class="budget-name-input" type="text" value="${escapeHTML(row.name)}" maxlength="40" data-category-name="${index}" aria-label="Nama kategori ${index + 1}"><small>${formatRupiah(row.used)} / ${formatRupiah(row.cap)}</small></span><span class="budget-controls"><span class="inline-number nominal-number"><span>Rp</span><input type="text" inputmode="numeric" value="${formatNumericInput(row.cap)}" data-budget="${escapeHTML(row.name)}" aria-label="Batas ${escapeHTML(row.name)} dalam rupiah"></span><button class="delete-category" type="button" data-delete-category="${index}" aria-label="Hapus kategori ${escapeHTML(row.name)}">Hapus</button></span></div>`).join("");
+  result.budgetRows.forEach((row, index) => {
+    const node = list.children[index];
+    const name = node.querySelector("[data-category-name]");
+    const amount = node.querySelector("[data-budget]");
+    if (document.activeElement !== name) name.value = row.name;
+    if (document.activeElement !== amount) amount.value = formatNumericInput(row.cap);
+    amount.dataset.budget = row.name;
+    amount.setAttribute("aria-label", `Batas ${row.name} dalam rupiah`);
+    node.querySelector("small").textContent = `${formatRupiah(row.used)} / ${formatRupiah(row.cap)}`;
+    node.querySelector("button").setAttribute("aria-label", `Hapus kategori ${row.name}`);
+  });
   if ($('input[name="transaction-type"]:checked')?.value === "expense") fillCategoryOptions($("#transaction-category").value);
 }
 
@@ -1870,7 +1923,10 @@ function renderHealthTrend() {
 
 function saveHealthAudit() {
   const result = calculateHealth(healthProfile);
-  healthHistory.unshift({ id: newId("health"), businessName: healthProfile.businessName, sector: healthProfile.sector, period: healthProfile.period, score: result.score, status: result.status.label, at: new Date().toISOString(), profile: clone(healthProfile) });
+  const samePeriod = item => item.period === healthProfile.period && (item.sector || item.profile?.sector || "general") === healthProfile.sector && String(item.businessName || "").trim().toLocaleLowerCase("id-ID") === healthProfile.businessName.trim().toLocaleLowerCase("id-ID");
+  const existing = healthHistory.find(samePeriod);
+  healthHistory = healthHistory.filter(item => !samePeriod(item));
+  healthHistory.unshift({ id: existing?.id || newId("health"), businessName: healthProfile.businessName, sector: healthProfile.sector, period: healthProfile.period, score: result.score, status: result.status.label, at: new Date().toISOString(), profile: clone(healthProfile) });
   healthHistory = healthHistory.slice(0, 24);
   if (!persistHealth()) return;
   renderHealthHistory();
@@ -1934,8 +1990,8 @@ function renderDigital() {
   $("#digital-signal-list").innerHTML = assessment.signals.length ? assessment.signals.map(signal => '<li class="' + signal.tone + '">' + escapeHTML(signal.text) + '</li>').join("") : '<li class="neutral">Belum ada sinyal angka yang perlu diwaspadai.</li>';
   $("#digital-result-cards").innerHTML = assessment.categoryResults.map(item => `<article class="digital-result-card ${item.level}"><div><span>${escapeHTML(item.levelLabel)}</span><b>${item.readiness}%</b></div><h4>${escapeHTML(item.title)}</h4><p>${escapeHTML(item.description)}</p><div class="progress"><i style="width:${item.readiness}%"></i></div></article>`).join("");
   $("#digital-checklist-title").textContent = config.checklistTitle;
-  $("#digital-checklist-count").textContent = assessment.checklist.length;
-  $("#digital-checklist").innerHTML = assessment.checklist.length ? assessment.checklist.map((item, index) => `<label><input type="checkbox"><span><small>${escapeHTML(item.categoryTitle)}</small><strong>${escapeHTML(item.checklist)}</strong></span><b>${String(index + 1).padStart(2, "0")}</b></label>`).join("") : '<div class="empty-state compact">Tidak ada langkah mendesak. Jadwalkan pemeriksaan ulang bulan depan.</div>';
+  $("#digital-checklist").innerHTML = assessment.checklist.length ? assessment.checklist.map((item, index) => `<label class="${digitalState.completedTasks.includes(item.id) ? "is-complete" : ""}"><input type="checkbox" data-digital-task="${escapeHTML(item.id)}" ${digitalState.completedTasks.includes(item.id) ? "checked" : ""}><span><small>${escapeHTML(item.categoryTitle)}</small><strong>${escapeHTML(item.checklist)}</strong></span><b>${String(index + 1).padStart(2, "0")}</b></label>`).join("") : '<div class="empty-state compact">Tidak ada langkah mendesak. Jadwalkan pemeriksaan ulang bulan depan.</div>';
+  updateDigitalTaskProgress();
   $("#digital-90-day-plan").innerHTML = assessment.phases.map(phase => `<article><div><span>${escapeHTML(phase.label)}</span><strong>${escapeHTML(phase.focus)}</strong></div><ol>${phase.items.map(item => `<li><small>${escapeHTML(item.categoryTitle || "Fondasi digital")}</small>${escapeHTML(item.checklist)}</li>`).join("") || "<li>Tidak ada tindakan tambahan.</li>"}</ol></article>`).join("");
   const budgetText = (minimum, maximum) => `${formatRupiah(minimum)}–${formatRupiah(Math.max(maximum, minimum))}`;
   $("#digital-budget-self").textContent = budgetText(assessment.budget.selfMin, assessment.budget.selfMax);
@@ -1943,6 +1999,11 @@ function renderDigital() {
   $("#digital-brief").innerHTML = `<dl><div><dt>Usaha</dt><dd>${escapeHTML(healthProfile.businessName || "Usaha saya")}</dd></div><div><dt>Prioritas</dt><dd>${escapeHTML(priority?.title || "Fondasi digital")}</dd></div><div><dt>Tujuan</dt><dd>${escapeHTML(assessment.brief.objective)}</dd></div><div><dt>Kondisi saat ini</dt><dd>${escapeHTML(assessment.brief.currentCondition)}</dd></div><div><dt>Ukuran keberhasilan</dt><dd>${escapeHTML(assessment.brief.successMetric)}</dd></div></dl>`;
   $("#digital-whatsapp").textContent = config.consultationLabel;
   $("#digital-whatsapp").title = config.whatsappNumber ? "Buka percakapan WhatsApp" : "Nomor konsultasi belum diatur Admin";
+}
+
+function updateDigitalTaskProgress() {
+  const inputs = $$("#digital-checklist [data-digital-task]");
+  $("#digital-checklist-count").textContent = `${inputs.filter(input => input.checked).length}/${inputs.length} selesai`;
 }
 
 function selectDigitalAnswer(value) {
@@ -1979,7 +2040,7 @@ function restartDigitalAssessment() {
 }
 
 function submitDigitalProfile() {
-  digitalState = sanitizeDigitalState({ profile: readDigitalProfileForm(), answers: digitalState.answers, completed: false }, adminState.digitalConfig);
+  digitalState = sanitizeDigitalState({ profile: readDigitalProfileForm(), answers: digitalState.answers, completedTasks: digitalState.completedTasks, completed: false }, adminState.digitalConfig);
   digitalQuestionIndex = firstUnansweredDigitalIndex();
   digitalProfileEditing = false;
   if (!persistDigital()) return;
@@ -2114,7 +2175,7 @@ function resizeBusinessFrame() {
   const documentRoot = frame?.contentDocument;
   if (!frame || !documentRoot) return;
   const calculatorPage = documentRoot.querySelector(".calculator-page");
-  const height = Math.max(calculatorPage?.scrollHeight || 0, 720);
+  const height = Math.max(Math.ceil(Math.max(calculatorPage?.scrollHeight || 0, calculatorPage?.getBoundingClientRect().height || 0)) + 2, 720);
   frame.style.height = `${height}px`;
 }
 
@@ -2229,7 +2290,7 @@ function renderBenefitsEditor() {
 function digitalContentField(path, label, value, rows = 2, type = "textarea") {
   const id = `digital-content-${path.replaceAll(".", "-")}`;
   if (type === "tel") return `<label for="${id}"><span>${escapeHTML(label)}</span><input id="${id}" data-digital-content-field="${escapeHTML(path)}" type="tel" inputmode="numeric" value="${escapeHTML(value)}" maxlength="20"></label>`;
-  if (type === "number") return `<label for="${id}"><span>${escapeHTML(label)}</span><input id="${id}" data-digital-content-field="${escapeHTML(path)}" type="number" min="0" max="1000000000" step="100000" value="${escapeHTML(value)}"></label>`;
+  if (type === "number") return `<label for="${id}"><span>${escapeHTML(label)}</span><input id="${id}" data-digital-content-field="${escapeHTML(path)}" type="number" min="0" max="1000000000" step="1" value="${escapeHTML(value)}"></label>`;
   return `<label for="${id}"><span>${escapeHTML(label)}</span><textarea id="${id}" data-digital-content-field="${escapeHTML(path)}" rows="${rows}" maxlength="1000">${escapeHTML(value)}</textarea></label>`;
 }
 
@@ -2610,7 +2671,18 @@ function exportTransactions(format) {
   showToast(`File CSV berisi ${count} transaksi terbaru.${suffix}`);
 }
 
+function formatCurrencyControl(input) {
+  const position = input.selectionStart;
+  const digits = position === null ? null : (input.value.slice(0, position).match(/\d/g) || []).length;
+  input.value = formatNumericInput(input.value);
+  if (digits === null || typeof input.setSelectionRange !== "function") return;
+  let cursor = 0, seen = 0;
+  while (cursor < input.value.length && seen < digits) { if (/\d/.test(input.value[cursor])) seen += 1; cursor += 1; }
+  input.setSelectionRange(cursor, cursor);
+}
+
 function wireEvents() {
+  window.addEventListener("storage", synchronizeStoredData);
   $("#access-form").addEventListener("submit", event => { event.preventDefault(); activateCode($("#access-code").value); });
   $("#use-demo-code").addEventListener("click", () => { $("#access-code").value = "SBB-DEMO-PRO-2026"; activateCode($("#access-code").value); });
   $("#demo-google").addEventListener("click", () => setSession({ role: "user", name: "Dina Pratama", plan: "Pro", provider: "google-demo", signedInAt: new Date().toISOString() }));
@@ -2621,6 +2693,10 @@ function wireEvents() {
   $("#mobile-more").addEventListener("click", () => setSidebarOpen(!$("#sidebar").classList.contains("is-open")));
   $("#quick-backup").addEventListener("click", downloadLocalBackup);
   $(".business-frame").addEventListener("load", () => { applyVisualSettings(); observeBusinessFrame(); });
+  $(".business-frame").addEventListener("sbb-calculator-reset", event => {
+    if (typeof event.detail !== "function") return;
+    confirmAction("Kembalikan angka contoh?", "Angka yang sudah kamu ubah untuk kalkulator ini akan diganti. Kalkulator lain tetap tersimpan.", event.detail);
+  });
   window.addEventListener("resize", () => { if (window.innerWidth > 960) setSidebarOpen(false); resizeBusinessFrame(); });
   document.addEventListener("keydown", event => {
     if (event.key === "Escape") setSidebarOpen(false);
@@ -2689,7 +2765,7 @@ function wireEvents() {
   $("#money-prev").addEventListener("click", () => { selectedMonth = shiftMonth(selectedMonth, -1); renderMoney(); });
   $("#money-next").addEventListener("click", () => { selectedMonth = shiftMonth(selectedMonth, 1); renderMoney(); });
   $$('input[name="transaction-type"]').forEach(input => input.addEventListener("change", () => fillCategoryOptions()));
-  $("#transaction-amount").addEventListener("input", event => { event.target.value = formatNumericInput(event.target.value); $("#transaction-error").textContent = ""; });
+  $("#transaction-amount").addEventListener("input", event => { formatCurrencyControl(event.target); $("#transaction-error").textContent = ""; });
   $("#history-search").addEventListener("input", event => {
     historySearch = event.target.value;
     renderHistory(calculateMonth(transactions, moneySettings, selectedMonth));
@@ -2713,8 +2789,8 @@ function wireEvents() {
   $("#export-excel").addEventListener("click", () => exportTransactions("xlsx"));
   $("#export-csv").addEventListener("click", () => exportTransactions("csv"));
   $("#add-expense-category").addEventListener("click", addExpenseCategory);
-  $("#saving-target").addEventListener("input", event => { event.target.value = formatNumericInput(event.target.value); });
-  $("#budget-list").addEventListener("input", event => { if (event.target.matches("[data-budget]")) event.target.value = formatNumericInput(event.target.value); });
+  $("#saving-target").addEventListener("input", event => { formatCurrencyControl(event.target); });
+  $("#budget-list").addEventListener("input", event => { if (event.target.matches("[data-budget]")) formatCurrencyControl(event.target); });
   $("#saving-target").addEventListener("change", event => { moneySettings.savingTargetAmount = Math.min(numericValue(event.target.value), MAX_TRANSACTION_AMOUNT); if (!persistMoney()) return; renderAll(); });
   $("#budget-list").addEventListener("change", event => {
     const nameInput = event.target.closest("[data-category-name]");
@@ -2740,7 +2816,7 @@ function wireEvents() {
     renderMoney();
   }));
 
-  $$("[data-profile]").filter(input => MONEY_FIELDS.includes(input.dataset.profile)).forEach(input => input.addEventListener("input", event => { event.target.value = formatNumericInput(event.target.value); }));
+  $$("[data-profile]").filter(input => MONEY_FIELDS.includes(input.dataset.profile)).forEach(input => input.addEventListener("input", event => { formatCurrencyControl(event.target); }));
   $("#readiness-form").addEventListener("submit", event => {
     event.preventDefault();
     const next = readReadinessForm();
@@ -2774,7 +2850,7 @@ function wireEvents() {
     showToast("Pendapatan, pengeluaran, dan target tabungan sudah disalin.");
   });
 
-  $$('[data-health-money]').forEach(input => input.addEventListener("input", event => { event.target.value = formatNumericInput(event.target.value); }));
+  $$('[data-health-money]').forEach(input => input.addEventListener("input", event => { formatCurrencyControl(event.target); }));
   $("#health-form").addEventListener("submit", event => {
     event.preventDefault();
     healthProfile = readHealthForm();
@@ -2793,9 +2869,19 @@ function wireEvents() {
   });
   $("#save-health-audit").addEventListener("click", () => {
     healthProfile = readHealthForm();
-    if (!persistHealth()) return;
-    renderHealth();
     saveHealthAudit();
+    renderHealth();
+  });
+  $("#digital-checklist").addEventListener("change", event => {
+    const input = event.target.closest("[data-digital-task]");
+    if (!input) return;
+    const tasks = new Set(digitalState.completedTasks);
+    if (input.checked) tasks.add(input.dataset.digitalTask);
+    else tasks.delete(input.dataset.digitalTask);
+    digitalState.completedTasks = [...tasks];
+    if (!persistDigital()) return;
+    input.closest("label")?.classList.toggle("is-complete", input.checked);
+    updateDigitalTaskProgress();
   });
   $("#digital-prev").addEventListener("click", () => moveDigitalQuestion(-1));
   $("#digital-next").addEventListener("click", () => moveDigitalQuestion(1));
@@ -2927,6 +3013,12 @@ function createCodes(quantityOverride) {
   const quantity = Math.min(Math.max(Math.trunc(Number(quantityOverride ?? $("#code-quantity").value)) || 1, 1), 20);
   const plan = $("#code-plan").value;
   const expiresAt = $("#code-expiry").value;
+  if (!["Basic", "Pro", "Lifetime", "Trial"].includes(plan)) return showToast("Pilih paket kode yang valid.");
+  if (plan !== "Lifetime" && (!isValidISODate(expiresAt) || expiresAt < todayISO())) {
+    showToast("Pilih tanggal berlaku hari ini atau sesudahnya. Hanya paket Lifetime yang boleh tanpa tanggal.");
+    $("#code-expiry").focus();
+    return;
+  }
   const maxActivations = Math.min(Math.max(Math.trunc(Number($("#code-max-activation").value)) || 1, 1), 100);
   const existing = new Set(adminState.codes.map(item => item.code));
   const created = [];
@@ -3088,7 +3180,7 @@ else showGate();
 registerWebMCP();
 
 if ("serviceWorker" in navigator) {
-  const register = () => navigator.serviceWorker.register("./sw.js?v=25").catch(() => {});
+  const register = () => navigator.serviceWorker.register("./sw.js?v=26").catch(() => {});
   if (document.readyState === "complete") register();
   else window.addEventListener("load", register, { once: true });
 }

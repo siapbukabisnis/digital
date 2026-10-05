@@ -249,12 +249,114 @@ await test("Business autosave failure keeps stored data and shows an unsaved dra
   assert.match(badge.innerHTML, /Belum tersimpan/);
 });
 
+await test("Budget advice uses rupiah and prioritizes actual deficits", () => {
+  const settings = money.sanitizeSettings({ expenseCategories: ["Makan"], budgetAmounts: { Makan: 700000 }, savingTargetAmount: 500000 });
+  const result = money.calculateMonth([transaction({amount:1000000})], settings, "2026-09");
+  assert.match(money.nextStep(result), /Rp 200\.000/);
+  assert.ok(!money.nextStep(result).includes("%"));
+  const deficit = money.calculateMonth([transaction({type:"expense",amount:250000})], settings, "2026-09");
+  assert.equal(deficit.status, "Uang bulan ini minus");
+  assert.match(money.nextStep(deficit), /Rp 250\.000/);
+});
+
+await test("Pasted rupiah decimals never turn into amounts one hundred times larger", () => {
+  for (const input of ["Rp 1.000.000,00","1.000.000","1000000"]) assert.equal(money.numericValue(input),1000000);
+  assert.equal(money.numericValue("Rp 1.000,50"),1001);
+  assert.equal(money.numericValue(1000.5),1001);
+  assert.equal(money.numericValue("Rp -1.000"),0);
+  assert.equal(money.numericValue("9.7500"),97500);
+  assert.equal(money.numericValue(Infinity),0);
+  assert.equal(money.formatNumericInput("1.000.000,00"),"1.000.000");
+});
+
+await test("Non-lifetime codes require a valid expiry date", () => {
+  const h = harness();
+  const plan = h.controls("#code-plan"); const date = h.controls("#code-expiry");
+  h.controls("#code-max-activation").value="1";
+  plan.value="Pro"; date.value="";
+  const before=h.run("adminState.codes.length");
+  assert.equal(h.run("createCodes(1)"),undefined);
+  assert.equal(h.run("adminState.codes.length"),before);
+  date.value="2026-02-30";
+  assert.equal(h.run("createCodes(1)"),undefined);
+  date.value="2000-01-01";
+  assert.equal(h.run("createCodes(1)"),undefined);
+  plan.value="Lifetime"; date.value="";
+  assert.equal(h.run("createCodes(1).length"),1);
+});
+
+await test("Digital tasks survive sanitization, profile edits and backup", () => {
+  const id = digital.DEFAULT_DIGITAL_CONFIG.questions[0].id;
+  const state = digital.sanitizeDigitalState({completedTasks:[id,id,"unknown"]});
+  assert.deepEqual(state.completedTasks,[id]);
+  const parsed = backup.parseBackupText(JSON.stringify(backup.createBackupPayload({digitalState:state})));
+  assert.deepEqual(digital.sanitizeDigitalState(parsed.digitalState).completedTasks,[id]);
+  const h = harness({"sbb-digital-assessment-v1":state});
+  h.run("readDigitalProfileForm = () => ({...digitalState.profile,completed:true});");
+  h.controls("#digital-assessment");
+  h.run("submitDigitalProfile()");
+  assert.deepEqual(h.plain("digitalState.completedTasks"),[id]);
+  assert.deepEqual(JSON.parse(h.raw.get("sbb-digital-assessment-v1")).completedTasks,[id]);
+});
+
+await test("A stale tab cannot overwrite transactions added by another tab", () => {
+  const h = harness({"atur-uang-transactions-v1":[transaction()]});
+  const newer = [transaction(),transaction({id:"other-tab",amount:2000000,createdAt:2})];
+  h.raw.set("atur-uang-transactions-v1",JSON.stringify(newer));
+  assert.equal(h.run('commitTransaction({type:"expense",amount:100000,category:"Makan",date:"2026-09-02"})'),null);
+  assert.deepEqual(JSON.parse(h.raw.get("atur-uang-transactions-v1")),newer);
+  assert.equal(h.run("transactions.length"),2);
+  assert.match(h.messages.at(-1),/tab lain/);
+  assert.ok(h.run('commitTransaction({type:"expense",amount:100000,category:"Makan",date:"2026-09-02"})'));
+  assert.equal(JSON.parse(h.raw.get("atur-uang-transactions-v1")).length,3);
+});
+
+await test("Storage events update totals and respect sign-out from another tab", () => {
+  const h = harness({"sbb-suite-demo-session-v1":{role:"user",provider:"google-demo",name:"QA",plan:"Pro",signedInAt:new Date().toISOString()}});
+  assert.ok(h.run("session"));
+  h.raw.set("atur-uang-transactions-v1",JSON.stringify([transaction({amount:7000000})]));
+  h.run('synchronizeStoredData({key:"atur-uang-transactions-v1"})');
+  assert.equal(h.run("calculateMonth(transactions,moneySettings,'2026-09').income"),7000000);
+  h.raw.delete("sbb-suite-demo-session-v1");
+  h.run('synchronizeStoredData({key:"sbb-suite-demo-session-v1"})');
+  assert.equal(h.run("session"),null);
+});
+
+await test("Repeated health saves update one period and failure keeps both previous values", () => {
+  const h = harness();
+  h.run("renderHealthHistory = () => {}; renderHealthTrend = () => {}; healthProfile = {...healthProfile,period:'2026-08'}; saveHealthAudit();");
+  const id = h.run("healthHistory[0].id");
+  h.run("healthProfile.revenue = 60000000; saveHealthAudit();");
+  assert.equal(h.run("healthHistory.length"),1);
+  assert.equal(h.run("healthHistory[0].id"),id);
+  h.run("healthProfile.period = '2026-09'; saveHealthAudit();");
+  assert.equal(h.run("healthHistory.length"),2);
+  const before = [...h.raw];
+  h.fail("sbb-health-history-v1");
+  h.run("healthProfile.period = '2026-10'; saveHealthAudit();");
+  assert.deepEqual([...h.raw],before);
+  assert.equal(h.run("healthHistory.length"),2);
+  assert.equal(h.run("healthProfile.period"),"2026-09");
+});
+
+await test("Malformed calculator values remain editable and save as an object", async () => {
+  const html = await fs.readFile(new URL("./dist/business/index.html",import.meta.url),"utf8");
+  const source = html.slice(html.indexOf("/* calculator-data.mjs */"),html.indexOf("/* calculator-only.mjs */"));
+  const h = harness({"sbb-kalkulator-usaha-v1":{values:[]}});
+  h.controls(".autosave-pill");
+  vm.runInContext(source,h.context);
+  h.run("loadSaved(); inputFor().businessName = 'Usaha QA'; persist();");
+  assert.equal(h.run("Array.isArray(saved)"),false);
+  const stored = JSON.parse(h.raw.get("sbb-kalkulator-usaha-v1"));
+  assert.equal(stored.values[h.run("activeId")].businessName,"Usaha QA");
+});
+
 // Test the actual worker under a GitHub-style subdirectory, with real Response objects.
 await test("Offline navigation keeps the calculator and caching never clears another app", async () => {
   const worker = await fs.readFile(new URL("./dist/sw.js", import.meta.url), "utf8");
   const scope = "https://example.test/sbb/";
-  const current = `sbb-finance-suite:${scope}:v25`;
-  const old = `sbb-finance-suite:${scope}:v24`;
+  const current = `sbb-finance-suite:${scope}:v26`;
+  const old = `sbb-finance-suite:${scope}:v25`;
   const stores = new Map([[current, new Map()], [old, new Map()], ["another-app-v1", new Map()], ["sbb-finance-suite:https://example.test/other/:v24", new Map()]]);
   const handlers = new Map();
   const keyFor = input => typeof input === "string" ? input : input.url;

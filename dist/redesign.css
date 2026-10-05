@@ -892,3 +892,9 @@ dialog p { font-size: .95rem; }
   *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
   .module-card:hover, .btn:hover { transform: none; }
 }
+.digital-checklist label.is-complete { background: var(--green-bg); border-color: var(--green); }
+.digital-checklist label.is-complete strong { text-decoration: line-through; color: var(--muted); }
+.is-embedded-root, body.is-embedded { min-width: 0; }
+@media (max-width: 360px) {
+  .overview-metrics { grid-template-columns: 1fr; }
+}

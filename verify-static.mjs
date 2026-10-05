@@ -55,7 +55,7 @@ const ids = [...literalIds, ...generatedIds];
 assert.equal(ids.length, new Set(ids).size, "ID antarmuka harus unik");
 
 const idSet = new Set(ids);
-const referencedIds = [...appSource.matchAll(/\$\("#([^"]+)"\)/g)].map(match => match[1]);
+const referencedIds = [...appSource.matchAll(/\$\("#([\w-]+)[^"]*"\)/g)].map(match => match[1]);
 for (const referencedId of new Set(referencedIds)) {
   assert.ok(idSet.has(referencedId), `JavaScript mengarah ke ID yang tidak ada: ${referencedId}`);
 }

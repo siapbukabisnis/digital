@@ -973,7 +973,7 @@ body { background: #eef4f8; }
     .static-status.is-error{color:#b83a38!important}
     @media(max-width:520px){.static-field{grid-template-columns:1fr}.static-field button{width:100%}}
   </style>
-  <link rel="stylesheet" href="../redesign.css?v=25">
+  <link rel="stylesheet" href="../redesign.css?v=26">
 </head>
 <body>
   <noscript><div class="static-gate"><div class="static-card"><h1>SBB membutuhkan JavaScript.</h1><p>Aktifkan JavaScript di browser, lalu buka kembali halaman ini.</p></div></div></noscript>
@@ -4790,11 +4790,13 @@ let activeCategory = PRIORITY_CATEGORY;
 let searchQuery = "";
 let saved = {};
 let notify = () => {};
+let committedBusinessRaw = null;
 
 function loadSaved() {
   try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-    saved = parsed.values && typeof parsed.values === "object" ? parsed.values : {};
+    committedBusinessRaw = localStorage.getItem(STORAGE_KEY);
+    const parsed = JSON.parse(committedBusinessRaw || "{}");
+    saved = parsed?.values && typeof parsed.values === "object" && !Array.isArray(parsed.values) ? parsed.values : {};
     activeId = CALCULATOR_TEMPLATES.some(item => item.id === parsed.activeId) ? parsed.activeId : activeId;
     const allowedCategories = [PRIORITY_CATEGORY, ...CALCULATOR_CATEGORIES];
     const currentTemplate = CALCULATOR_TEMPLATES.find(item => item.id === activeId);
@@ -4806,7 +4808,15 @@ function loadSaved() {
 
 function persist() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ activeId, activeCategory, values: saved }));
+    if (localStorage.getItem(STORAGE_KEY) !== committedBusinessRaw) {
+      loadSaved();
+      renderCalculator();
+      notify("Ada hitungan baru dari tab lain. Periksa data terbaru lalu ulangi perubahan agar hitungan tidak tertimpa.");
+      return false;
+    }
+    const encoded = JSON.stringify({ activeId, activeCategory, values: saved });
+    localStorage.setItem(STORAGE_KEY, encoded);
+    committedBusinessRaw = encoded;
     const badge = document.querySelector(".autosave-pill");
     if (badge) { badge.classList.remove("save-failed"); badge.innerHTML = '<i></i><div><strong>Tersimpan otomatis</strong><small>di perangkat ini</small></div>'; }
     return true;
@@ -4843,7 +4853,7 @@ function normalizeCostItems(candidate, fallback, prefix, limit = 20) {
 function inputFor(item = template()) {
   if (!saved[item.id]) saved[item.id] = cloneTemplateInput(item);
   const base = cloneTemplateInput(item);
-  const current = saved[item.id] || {};
+  const current = saved[item.id] && typeof saved[item.id] === "object" && !Array.isArray(saved[item.id]) ? saved[item.id] : {};
   const normalized = {
     ...base,
     ...current,
@@ -4926,7 +4936,8 @@ function calculatorMarkup() {
         <p class="calculator-disclaimer"><strong>Catatan proyeksi:</strong> hasil dihitung dari asumsi yang Anda masukkan dan tidak menjamin laba aktual. Validasi kembali dengan riset pasar, strategi merek, karakter pasar sasaran, tingkat penyerapan, kapasitas usaha, struktur pajak, kebutuhan modal kerja, dan risiko operasional.</p>
       </div>
     </div>
-  </section>`;
+  </section>
+  <dialog id="calculator-confirm" aria-labelledby="calculator-confirm-title"><form method="dialog"><h2 id="calculator-confirm-title">Kembalikan angka contoh?</h2><p>Angka yang sudah kamu ubah untuk kalkulator ini akan diganti. Kalkulator lain tetap tersimpan.</p><div class="dialog-actions"><button class="btn ghost" value="cancel">Batal</button><button class="btn primary" value="reset">Kembalikan contoh</button></div></form></dialog>`;
 }
 
 function field(label, key, value, options = {}) {
@@ -5132,6 +5143,13 @@ function setNested(input, key, value) {
   else input[name] = numberValue(value);
 }
 
+function resetCalculatorExample() {
+  saved[activeId] = cloneTemplateInput(template());
+  if (!persist()) return;
+  renderCalculator();
+  notify("Angka contoh kalkulator dikembalikan.");
+}
+
 function initCalculator(options = {}) {
   notify = options.showToast || notify;
   loadSaved();
@@ -5221,15 +5239,27 @@ function initCalculator(options = {}) {
     control.value = inputNumber(numberValue(control.value));
   });
   calcDollar("#calculator-reset").addEventListener("click", () => {
-    saved[activeId] = cloneTemplateInput(template());
-    persist();
-    renderCalculator();
-    notify("Angka contoh kalkulator dikembalikan.");
+    if (window.frameElement) {
+      window.frameElement.dispatchEvent(new CustomEvent("sbb-calculator-reset", { detail: resetCalculatorExample }));
+      return;
+    }
+    const dialog = calcDollar("#calculator-confirm");
+    dialog.returnValue = "";
+    dialog.showModal();
+  });
+  calcDollar("#calculator-confirm").addEventListener("close", () => {
+    if (calcDollar("#calculator-confirm").returnValue !== "reset") return;
+    resetCalculatorExample();
   });
   const desktopCatalog = window.matchMedia("(min-width: 1181px)");
   const syncCatalog = () => { if (desktopCatalog.matches) calcDollar("#calculator-catalog").open = true; };
   if (!desktopCatalog.matches) calcDollar("#calculator-catalog").open = false;
   desktopCatalog.addEventListener?.("change", syncCatalog);
+  window.addEventListener("storage", event => {
+    if (event.key !== STORAGE_KEY && event.key !== null) return;
+    loadSaved();
+    renderCalculator();
+  });
 }
 
 function calculatorToolDefinitions() {
@@ -5277,6 +5307,7 @@ const app = document.querySelector("#app");
 const toast = document.querySelector("#toast");
 let toastTimer;
 document.body.classList.toggle("is-embedded", new URLSearchParams(location.search).get("embed") === "1");
+document.documentElement.classList.toggle("is-embedded-root", document.body.classList.contains("is-embedded"));
 
 function showToast(message) {
   if (!toast) return;
@@ -5315,7 +5346,7 @@ registerWebMCP();
 
 window.__SBB_APP_READY__ = true;
 if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
-  const register = () => navigator.serviceWorker.register(new URL("../sw.js?v=25", location.href).href).catch(() => {});
+  const register = () => navigator.serviceWorker.register(new URL("../sw.js?v=26", location.href).href).catch(() => {});
   if (document.readyState === "complete") register();
   else window.addEventListener("load", register, { once: true });
 }
