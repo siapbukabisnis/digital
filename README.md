@@ -27,7 +27,9 @@ Tampilan dan alur aplikasi dibangun ulang menjadi ruang usaha yang hangat, moder
 - Panel admin, halaman informasi, tabel, formulir, kondisi kosong, serta navigasi keyboard memakai gaya yang konsisten.
 - Tombol backup cepat; kunci penyimpanan dan format data lama dipertahankan.
 
-Panduan unggah GitHub, GitHub Pages, dan pembaruan versi lama tersedia di **PANDUAN-UPDATE-v25.md**. Ekstrak ZIP lalu unggah isinya ke root repository.
+Untuk Worker Cloudflare **digital**, gunakan **PANDUAN-CLOUDFLARE-v25.md**. Konfigurasi paket menargetkan Worker tersebut dan menyajikan folder `dist`.
+
+Panduan unggah GitHub, opsi GitHub Pages, dan pembaruan versi lama tersedia di **PANDUAN-UPDATE-v25.md**. Ekstrak ZIP lalu unggah isinya ke root repository.
 
 ## Modul
 
@@ -76,7 +78,9 @@ Versi produksi sebaiknya menggunakan Cloudflare Worker untuk API, D1 untuk hash 
 
 ## Cloudflare
 
-`wrangler.jsonc` menunjuk ke `dist` sebagai aset statis:
+`wrangler.jsonc` menargetkan Worker `digital` dan menunjuk ke `dist` sebagai aset statis. Jika memakai Workers Builds, pilih repository `siapbukabisnis/digital`, branch `main`, root repository, build command `npm run check`, dan deploy command `npx wrangler deploy`.
+
+Untuk deploy langsung dari komputer, jalankan dari folder proyek:
 
 ```bash
 npx wrangler deploy
